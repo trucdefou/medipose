@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0a1628" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>FisioMotion — Análisis de Movimiento</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --bg:        #060e1f;
+      --surface:   #0d1e38;
+      --border:    #1a3357;
+      --accent:    #00e5ff;
+      --accent2:   #00ff9d;
+      --warn:      #ff6b35;
+      --text:      #e8f4f8;
+      --muted:     #5a7a99;
+      --mono:      'Space Mono', monospace;
+      --sans:      'DM Sans', sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ─── SPLASH ─── */
+    #splash {
+      position: fixed; inset: 0; z-index: 100;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: var(--bg);
+      gap: 24px;
+      transition: opacity .5s ease;
+    }
+    #splash.hidden { opacity: 0; pointer-events: none; }
+
+    .logo-ring {
+      width: 90px; height: 90px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+      animation: spin 4s linear infinite;
+    }
+    .logo-ring::before {
+      content: '';
+      position: absolute; inset: -2px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      border-top-color: var(--accent);
+      border-right-color: var(--accent2);
+      animation: spin 1.5s linear infinite;
+    }
+    .logo-icon { font-size: 36px; animation: spin-reverse 4s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes spin-reverse { to { transform: rotate(-360deg); } }
+
+    .splash-title {
+      font-family: var(--mono);
+      font-size: 22px; font-weight: 700;
+      letter-spacing: 2px;
+      color: var(--accent);
+    }
+    .splash-sub {
+      font-size: 13px; color: var(--muted);
+      letter-spacing: 1px; text-transform: uppercase;
+    }
+    .progress-bar {
+      width: 200px; height: 2px;
+      background: var(--border);
+      border-radius: 2px; overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      width: 0%;
+      transition: width .3s ease;
+    }
+    .splash-status {
+      font-family: var(--mono);
+      font-size: 11px; color: var(--muted);
+    }
+
+    /* ─── MAIN APP ─── */
+    #app {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      opacity: 0; transition: opacity .5s ease;
+    }
+    #app.visible { opacity: 1; }
+
+    /* ─── HEADER ─── */
+    header {
+      position: relative; z-index: 10;
+      padding: 12px 16px;
+      display: flex; align-items: center; justify-content: space-between;
+      background: linear-gradient(180deg, rgba(6,14,31,1) 0%, rgba(6,14,31,0) 100%);
+    }
+    .header-brand {
+      font-family: var(--mono);
+      font-size: 14px; font-weight: 700;
+      color: var(--accent); letter-spacing: 1px;
+    }
+    .header-status {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted);
+      transition: background .3s ease;
+    }
+    .status-dot.active { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
+    .status-dot.tracking { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1s ease infinite; }
+    @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.4 } }
+    .status-label { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+    /* ─── CAMERA AREA ─── */
+    .camera-wrap {
+      position: relative; flex: 1; overflow: hidden;
+    }
+    #video {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    #canvas {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      transform: scaleX(-1);
+    }
+
+    /* ─── SCAN LINES OVERLAY ─── */
+    .scanlines {
+      position: absolute; inset: 0; pointer-events: none; z-index: 2;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,229,255,.015) 2px,
+        rgba(0,229,255,.015) 4px
+      );
+    }
+
+    /* ─── CORNER BRACKETS ─── */
+    .bracket { position: absolute; width: 40px; height: 40px; z-index: 3; pointer-events: none; }
+    .bracket-tl { top: 16px; left: 16px; border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+    .bracket-tr { top: 16px; right: 16px; border-top: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+    .bracket-bl { bottom: 80px; left: 16px; border-bottom: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+    .bracket-br { bottom: 80px; right: 16px; border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+
+    /* ─── METRICS HUD ─── */
+    .hud {
+      position: absolute; top: 60px; right: 12px;
+      z-index: 4; display: flex; flex-direction: column; gap: 6px;
+    }
+    .hud-card {
+      background: rgba(13,30,56,.85);
+      border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 10px;
+      backdrop-filter: blur(8px);
+      min-width: 90px;
+    }
+    .hud-label { font-family: var(--mono); font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+    .hud-value { font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--accent); line-height: 1.2; }
+    .hud-value.good { color: var(--accent2); }
+    .hud-value.warn { color: var(--warn); }
+
+    /* ─── JOINT ANGLE PANEL ─── */
+    .angles-panel {
+      position: absolute; top: 60px; left: 12px;
+      z-index: 4; display: flex; flex-direction: column; gap: 4px;
+    }
+    .angle-row {
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(13,30,56,.75);
+      border: 1px solid var(--border);
+      border-radius: 6px; padding: 5px 10px;
+      backdrop-filter: blur(8px);
+    }
+    .angle-joint { font-family: var(--mono); font-size: 9px; color: var(--muted); width: 52px; }
+    .angle-val { font-family: var(--mono); font-size: 13px; font-weight: 700; width: 38px; text-align: right; }
+    .angle-bar { flex: 1; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; min-width: 40px; }
+    .angle-fill { height: 100%; border-radius: 2px; transition: width .15s ease, background .3s; }
+
+    /* ─── BOTTOM BAR ─── */
+    .bottom-bar {
+      position: relative; z-index: 10;
+      padding: 12px 20px;
+      display: flex; align-items: center; justify-content: space-around;
+      background: linear-gradient(0deg, rgba(6,14,31,1) 0%, rgba(6,14,31,0) 100%);
+    }
+    .btn {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      background: none; border: none; cursor: pointer;
+      color: var(--muted); font-family: var(--sans); font-size: 10px;
+      transition: color .2s;
+    }
+    .btn:active { transform: scale(.92); }
+    .btn.active { color: var(--accent); }
+    .btn-icon {
+      width: 44px; height: 44px; border-radius: 12px;
+      border: 1.5px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+      transition: border-color .2s, background .2s;
+    }
+    .btn.active .btn-icon { border-color: var(--accent); background: rgba(0,229,255,.08); }
+    .btn-record .btn-icon {
+      border-color: var(--warn); color: var(--warn);
+      width: 52px; height: 52px; border-radius: 50%;
+      font-size: 14px; font-family: var(--mono); font-weight: 700;
+    }
+    .btn-record.recording .btn-icon {
+      background: rgba(255,107,53,.15);
+      box-shadow: 0 0 16px rgba(255,107,53,.4);
+      animation: pulse 1s ease infinite;
+    }
+
+    /* ─── NO PERSON MESSAGE ─── */
+    .no-person {
+      position: absolute; inset: 0; z-index: 5;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+    .no-person-inner {
+      text-align: center; opacity: 0; transition: opacity .4s;
+    }
+    .no-person-inner.show { opacity: 1; }
+    .no-person-icon { font-size: 48px; margin-bottom: 8px; }
+    .no-person-text { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+    /* ─── SETTINGS PANEL ─── */
+    .settings-panel {
+      position: fixed; inset: 0; z-index: 50;
+      background: rgba(6,14,31,.95); backdrop-filter: blur(12px);
+      display: flex; flex-direction: column;
+      padding: 40px 24px 32px;
+      transform: translateX(100%); transition: transform .3s ease;
+    }
+    .settings-panel.open { transform: translateX(0); }
+    .settings-title { font-family: var(--mono); font-size: 18px; color: var(--accent); margin-bottom: 32px; }
+    .setting-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 0; border-bottom: 1px solid var(--border);
+    }
+    .setting-name { font-size: 15px; }
+    .setting-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .toggle {
+      width: 44px; height: 24px; border-radius: 12px;
+      background: var(--border); cursor: pointer; position: relative;
+      transition: background .3s;
+    }
+    .toggle.on { background: var(--accent); }
+    .toggle::after {
+      content: ''; position: absolute;
+      top: 2px; left: 2px;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: white; transition: transform .3s;
+    }
+    .toggle.on::after { transform: translateX(20px); }
+    .close-settings {
+      margin-top: auto; padding: 14px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; color: var(--text);
+      font-family: var(--mono); font-size: 14px;
+      cursor: pointer; text-align: center;
+    }
+
+    /* ─── TOAST ─── */
+    .toast {
+      position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 20px;
+      font-family: var(--mono); font-size: 12px; color: var(--accent);
+      z-index: 99; opacity: 0; pointer-events: none;
+      transition: opacity .3s;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<!-- SPLASH -->
+<div id="splash">
+  <div class="logo-ring"><span class="logo-icon">🦴</span></div>
+  <div class="splash-title">FISIO MOTION</div>
+  <div class="splash-sub">Análisis de Movimiento en Tiempo Real</div>
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="splash-status" id="splashStatus">Cargando modelo de detección...</div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+  <header>
+    <div class="header-brand">FISIO<span style="color:var(--accent2)">MOTION</span></div>
+    <div class="header-status">
+      <div class="status-dot" id="statusDot"></div>
+      <span class="status-label" id="statusLabel">INICIANDO</span>
+    </div>
+  </header>
+
+  <div class="camera-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div class="scanlines"></div>
+    <div class="bracket bracket-tl"></div>
+    <div class="bracket bracket-tr"></div>
+    <div class="bracket bracket-bl"></div>
+    <div class="bracket bracket-br"></div>
+
+    <!-- HUD Métricas -->
+    <div class="hud">
+      <div class="hud-card">
+        <div class="hud-label">FPS</div>
+        <div class="hud-value" id="hudFps">--</div>
+      </div>
+      <div class="hud-card">
+        <div class="hud-label">Confianza</div>
+        <div class="hud-value" id="hudConf">--%</div>
+      </div>
+      <div class="hud-card">
+        <div class="hud-label">Puntos</div>
+        <div class="hud-value" id="hudPts">0/33</div>
+      </div>
+    </div>
+
+    <!-- Panel ángulos articulares -->
+    <div class="angles-panel" id="anglesPanel"></div>
+
+    <!-- Sin persona -->
+    <div class="no-person">
+      <div class="no-person-inner" id="noPersonMsg">
+        <div class="no-person-icon">🧍</div>
+        <div class="no-person-text">Colócate frente a la cámara</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-bar">
+    <button class="btn active" id="btnSkeleton" onclick="toggleSkeleton()">
+      <div class="btn-icon">🦷</div>
+      <span>Esqueleto</span>
+    </button>
+    <button class="btn active" id="btnAngles" onclick="toggleAngles()">
+      <div class="btn-icon">📐</div>
+      <span>Ángulos</span>
+    </button>
+    <button class="btn btn-record" id="btnRecord" onclick="toggleRecord()">
+      <div class="btn-icon" id="recordIcon">REC</div>
+      <span id="recordLabel">Grabar</span>
+    </button>
+    <button class="btn active" id="btnCamera" onclick="flipCamera()">
+      <div class="btn-icon">🔄</div>
+      <span>Cámara</span>
+    </button>
+    <button class="btn" onclick="openSettings()">
+      <div class="btn-icon">⚙️</div>
+      <span>Config</span>
+    </button>
+  </div>
+</div>
+
+<!-- SETTINGS PANEL -->
+<div class="settings-panel" id="settingsPanel">
+  <div class="settings-title">// CONFIGURACIÓN</div>
+  <div class="setting-row">
+    <div><div class="setting-name">Puntos articulares</div><div class="setting-desc">Mostrar nodos en las articulaciones</div></div>
+    <div class="toggle on" id="togPoints" onclick="this.classList.toggle('on')"></div>
+  </div>
+  <div class="setting-row">
+    <div><div class="setting-name">Líneas de conexión</div><div class="setting-desc">Mostrar el esqueleto completo</div></div>
+    <div class="toggle on" id="togLines" onclick="this.classList.toggle('on')"></div>
+  </div>
+  <div class="setting-row">
+    <div><div class="setting-name">Ángulos articulares</div><div class="setting-desc">Calcular ángulos en tiempo real</div></div>
+    <div class="toggle on" id="togAnglesS" onclick="this.classList.toggle('on')"></div>
+  </div>
+  <div class="setting-row">
+    <div><div class="setting-name">Modo espejo</div><div class="setting-desc">Invertir imagen de cámara frontal</div></div>
+    <div class="toggle on" id="togMirror" onclick="this.classList.toggle('on')"></div>
+  </div>
+  <div class="setting-row">
+    <div><div class="setting-name">Alta precisión</div><div class="setting-desc">Más exactitud, puede ser más lento</div></div>
+    <div class="toggle" id="togHQ" onclick="this.classList.toggle('on')"></div>
+  </div>
+  <div class="close-settings" onclick="closeSettings()">CERRAR</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- MediaPipe via CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+const state = {
+  showSkeleton: true,
+  showAngles: true,
+  recording: false,
+  facingMode: 'user',
+  lastResults: null,
+  fps: 0,
+  frameCount: 0,
+  lastFpsTime: Date.now(),
+  poseDetected: false,
+  recordFrames: [],
+};
+
+// ─── DOM refs ────────────────────────────────────────────────────────────────
+const video   = document.getElementById('video');
+const canvas  = document.getElementById('canvas');
+const ctx     = canvas.getContext('2d');
+
+// ─── Resize canvas ───────────────────────────────────────────────────────────
+function resizeCanvas() {
+  canvas.width  = video.videoWidth  || canvas.offsetWidth;
+  canvas.height = video.videoHeight || canvas.offsetHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+
+// ─── MediaPipe Pose ───────────────────────────────────────────────────────────
+let pose = null;
+let mpCamera = null;
+
+async function initPose() {
+  setProgress(20, 'Inicializando MediaPipe Pose...');
+  pose = new Pose({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+  });
+  pose.setOptions({
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    enableSegmentation: false,
+    smoothSegmentation: false,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+  pose.onResults(onResults);
+  setProgress(50, 'Modelo cargado. Iniciando cámara...');
+  await startCamera();
+}
+
+async function startCamera() {
+  try {
+    const constraints = {
+      video: {
+        facingMode: state.facingMode,
+        width: { ideal: 640 }, height: { ideal: 480 }
+      }
+    };
+    if (mpCamera) mpCamera.stop();
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await new Promise(r => video.onloadedmetadata = r);
+    resizeCanvas();
+    setProgress(80, 'Cámara lista. Iniciando detección...');
+    mpCamera = new Camera(video, {
+      onFrame: async () => { await pose.send({ image: video }); },
+      width: 640, height: 480
+    });
+    mpCamera.start();
+    setProgress(100, 'Listo.');
+    setTimeout(showApp, 600);
+  } catch(e) {
+    setProgress(100, '⚠️ Error al acceder a la cámara');
+    console.error(e);
+  }
+}
+
+// ─── Progress ────────────────────────────────────────────────────────────────
+function setProgress(pct, msg) {
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('splashStatus').textContent = msg;
+}
+function showApp() {
+  document.getElementById('splash').classList.add('hidden');
+  document.getElementById('app').classList.add('visible');
+}
+
+// ─── FPS counter ─────────────────────────────────────────────────────────────
+function updateFps() {
+  state.frameCount++;
+  const now = Date.now();
+  const delta = now - state.lastFpsTime;
+  if (delta >= 1000) {
+    state.fps = Math.round(state.frameCount * 1000 / delta);
+    state.frameCount = 0;
+    state.lastFpsTime = now;
+    document.getElementById('hudFps').textContent = state.fps;
+  }
+}
+
+// ─── Landmark helpers ─────────────────────────────────────────────────────────
+const CONNECTIONS = [
+  // Face
+  [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],[9,10],
+  // Torso
+  [11,12],[11,23],[12,24],[23,24],
+  // Arms
+  [11,13],[13,15],[15,17],[17,19],[19,15],[15,21],
+  [12,14],[14,16],[16,18],[18,20],[20,16],[16,22],
+  // Legs
+  [23,25],[25,27],[27,29],[29,31],[27,31],
+  [24,26],[26,28],[28,30],[30,32],[28,32],
+];
+
+function lm(landmarks, idx) {
+  const l = landmarks[idx];
+  return l ? { x: l.x * canvas.width, y: l.y * canvas.height, v: l.visibility } : null;
+}
+
+function angleBetween(a, b, c) {
+  if (!a || !b || !c) return null;
+  const ab = { x: a.x - b.x, y: a.y - b.y };
+  const cb = { x: c.x - b.x, y: c.y - b.y };
+  const dot = ab.x * cb.x + ab.y * cb.y;
+  const cross = Math.abs(ab.x * cb.y - ab.y * cb.x);
+  return Math.round(Math.atan2(cross, dot) * 180 / Math.PI);
+}
+
+// Key joints for physiotherapy
+function getAngles(lms) {
+  const l = (i) => lm(lms, i);
+  return [
+    { name: 'Codo D',  val: angleBetween(l(12), l(14), l(16)), max: 170 },
+    { name: 'Codo I',  val: angleBetween(l(11), l(13), l(15)), max: 170 },
+    { name: 'Hombro D',val: angleBetween(l(14), l(12), l(24)), max: 180 },
+    { name: 'Hombro I',val: angleBetween(l(13), l(11), l(23)), max: 180 },
+    { name: 'Cadera D',val: angleBetween(l(12), l(24), l(26)), max: 180 },
+    { name: 'Cadera I',val: angleBetween(l(11), l(23), l(25)), max: 180 },
+    { name: 'Rodilla D',val: angleBetween(l(24), l(26), l(28)), max: 180 },
+    { name: 'Rodilla I',val: angleBetween(l(23), l(25), l(27)), max: 180 },
+  ];
+}
+
+// ─── Draw skeleton ────────────────────────────────────────────────────────────
+function drawSkeleton(lms) {
+  const showPts   = document.getElementById('togPoints').classList.contains('on');
+  const showLines = document.getElementById('togLines').classList.contains('on');
+
+  if (showLines) {
+    ctx.lineWidth = 2.5;
+    CONNECTIONS.forEach(([i, j]) => {
+      const a = lm(lms, i), b = lm(lms, j);
+      if (!a || !b) return;
+      if ((a.v || 0) < 0.3 || (b.v || 0) < 0.3) return;
+      const alpha = Math.min(a.v, b.v);
+      // Color: upper body cyan, lower body green
+      const isLower = (i >= 23 || j >= 23);
+      ctx.strokeStyle = isLower
+        ? `rgba(0,255,157,${alpha})`
+        : `rgba(0,229,255,${alpha})`;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    });
+  }
+
+  if (showPts) {
+    lms.forEach((l, i) => {
+      if (!l || (l.visibility || 0) < 0.3) return;
+      const px = l.x * canvas.width, py = l.y * canvas.height;
+      const isFace = i <= 10;
+      ctx.beginPath();
+      ctx.arc(px, py, isFace ? 3 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = isFace ? 'rgba(255,200,100,.7)' : 'rgba(0,229,255,1)';
+      ctx.fill();
+      // Glow
+      ctx.beginPath();
+      ctx.arc(px, py, isFace ? 6 : 9, 0, Math.PI * 2);
+      ctx.fillStyle = isFace ? 'rgba(255,200,100,.15)' : 'rgba(0,229,255,.15)';
+      ctx.fill();
+    });
+  }
+}
+
+// ─── Draw angle arcs ──────────────────────────────────────────────────────────
+function drawAngleArc(a, b, c, angle, color) {
+  if (!a || !b || !c || angle === null) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 3]);
+  // Line to A
+  ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(a.x, a.y); ctx.stroke();
+  // Line to C
+  ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.stroke();
+  ctx.setLineDash([]);
+  // Arc
+  const r = 22;
+  const ang1 = Math.atan2(a.y - b.y, a.x - b.x);
+  const ang2 = Math.atan2(c.y - b.y, c.x - b.x);
+  ctx.beginPath(); ctx.arc(b.x, b.y, r, ang1, ang2);
+  ctx.strokeStyle = color + 'cc'; ctx.lineWidth = 2; ctx.stroke();
+  // Label
+  ctx.fillStyle = color;
+  ctx.font = 'bold 11px "Space Mono"';
+  ctx.fillText(`${angle}°`, b.x + 14, b.y - 6);
+  ctx.restore();
+}
+
+// ─── Update angles panel ──────────────────────────────────────────────────────
+let anglesPanel = document.getElementById('anglesPanel');
+function updateAnglesPanel(angles) {
+  if (!state.showAngles) { anglesPanel.innerHTML = ''; return; }
+  anglesPanel.innerHTML = angles.filter(a => a.val !== null).map(a => {
+    const pct = Math.min(100, Math.round(a.val / a.max * 100));
+    const color = pct > 80 ? '#00ff9d' : pct > 50 ? '#00e5ff' : '#ff6b35';
+    return `<div class="angle-row">
+      <span class="angle-joint">${a.name}</span>
+      <span class="angle-val" style="color:${color}">${a.val}°</span>
+      <div class="angle-bar"><div class="angle-fill" style="width:${pct}%;background:${color}"></div></div>
+    </div>`;
+  }).join('');
+}
+
+// ─── Main results handler ─────────────────────────────────────────────────────
+function onResults(results) {
+  updateFps();
+  resizeCanvas();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const lms = results.poseLandmarks;
+  const detected = !!(lms && lms.length);
+  state.poseDetected = detected;
+
+  document.getElementById('noPersonMsg').classList.toggle('show', !detected);
+  document.getElementById('statusDot').className = 'status-dot ' + (detected ? 'tracking' : 'active');
+  document.getElementById('statusLabel').textContent = detected ? 'DETECTANDO' : 'EN ESPERA';
+
+  if (!detected) {
+    document.getElementById('hudConf').textContent = '--%';
+    document.getElementById('hudPts').textContent = '0/33';
+    document.getElementById('hudConf').className = 'hud-value';
+    anglesPanel.innerHTML = '';
+    return;
+  }
+
+  // Confidence (average visibility of key points)
+  const keyPts = [11,12,13,14,15,16,23,24,25,26,27,28];
+  const avgConf = Math.round(keyPts.reduce((s,i) => s + (lms[i]?.visibility || 0), 0) / keyPts.length * 100);
+  const visCount = lms.filter(l => (l.visibility || 0) > 0.3).length;
+  document.getElementById('hudConf').textContent = avgConf + '%';
+  document.getElementById('hudConf').className = 'hud-value ' + (avgConf > 75 ? 'good' : avgConf > 50 ? '' : 'warn');
+  document.getElementById('hudPts').textContent = visCount + '/33';
+
+  if (state.showSkeleton) drawSkeleton(lms);
+
+  // Angles
+  const angles = getAngles(lms);
+  if (state.showAngles) {
+    updateAnglesPanel(angles);
+    // Draw arcs on key joints
+    const l = (i) => lm(lms, i);
+    drawAngleArc(l(14), l(12), l(24), angleBetween(l(14),l(12),l(24)), '#00e5ff');
+    drawAngleArc(l(13), l(11), l(23), angleBetween(l(13),l(11),l(23)), '#00e5ff');
+    drawAngleArc(l(12), l(14), l(16), angleBetween(l(12),l(14),l(16)), '#00ffb3');
+    drawAngleArc(l(11), l(13), l(15), angleBetween(l(11),l(13),l(15)), '#00ffb3');
+    drawAngleArc(l(24), l(26), l(28), angleBetween(l(24),l(26),l(28)), '#ffdd57');
+    drawAngleArc(l(23), l(25), l(27), angleBetween(l(23),l(25),l(27)), '#ffdd57');
+  }
+
+  state.lastResults = results;
+
+  // Record frame
+  if (state.recording) {
+    state.recordFrames.push({
+      t: Date.now(),
+      landmarks: lms.map(l => ({ x: l.x, y: l.y, z: l.z, v: l.visibility })),
+      angles: angles.map(a => ({ name: a.name, val: a.val }))
+    });
+  }
+}
+
+// ─── Controls ─────────────────────────────────────────────────────────────────
+function toggleSkeleton() {
+  state.showSkeleton = !state.showSkeleton;
+  document.getElementById('btnSkeleton').classList.toggle('active', state.showSkeleton);
+}
+function toggleAngles() {
+  state.showAngles = !state.showAngles;
+  document.getElementById('btnAngles').classList.toggle('active', state.showAngles);
+  if (!state.showAngles) anglesPanel.innerHTML = '';
+}
+function toggleRecord() {
+  state.recording = !state.recording;
+  const btn = document.getElementById('btnRecord');
+  btn.classList.toggle('recording', state.recording);
+  document.getElementById('recordIcon').textContent = state.recording ? '■' : 'REC';
+  document.getElementById('recordLabel').textContent = state.recording ? 'Detener' : 'Grabar';
+  if (!state.recording && state.recordFrames.length > 0) {
+    downloadRecording();
+  }
+}
+function downloadRecording() {
+  const data = {
+    meta: { app: 'FisioMotion', date: new Date().toISOString(), frames: state.recordFrames.length },
+    session: state.recordFrames
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `fisio_${Date.now()}.json`;
+  a.click(); URL.revokeObjectURL(url);
+  state.recordFrames = [];
+  showToast(`✅ ${data.meta.frames} fotogramas guardados`);
+}
+async function flipCamera() {
+  state.facingMode = state.facingMode === 'user' ? 'environment' : 'user';
+  const mirror = document.getElementById('togMirror').classList.contains('on');
+  const flip = state.facingMode === 'user' && mirror;
+  video.style.transform = flip ? 'scaleX(-1)' : 'scaleX(1)';
+  canvas.style.transform = flip ? 'scaleX(-1)' : 'scaleX(1)';
+  await startCamera();
+}
+function openSettings() { document.getElementById('settingsPanel').classList.add('open'); }
+function closeSettings() { document.getElementById('settingsPanel').classList.remove('open'); }
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  setProgress(10, 'Cargando librerías...');
+  setTimeout(initPose, 500);
+});
+</script>
+</body>
+</html>
