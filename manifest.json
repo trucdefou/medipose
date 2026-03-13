@@ -1,6 +1,6 @@
 {
-  "name": "FisioMotion — Análisis de Movimiento",
-  "short_name": "FisioMotion",
+  "name": "medipose — Análisis de Movimiento",
+  "short_name": "medipose",
   "description": "Detección de esqueleto en tiempo real para fisioterapia y rehabilitación",
   "start_url": "./index.html",
   "display": "fullscreen",

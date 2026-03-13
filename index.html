@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0a1628" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>FisioMotion — Análisis de Movimiento</title>
+  <title>medipose — Análisis de Movimiento</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
@@ -353,7 +353,7 @@
 <!-- SPLASH -->
 <div id="splash">
   <div class="logo-ring"><span class="logo-icon">🦴</span></div>
-  <div class="splash-title">FISIO MOTION</div>
+  <div class="splash-title">MEDIPOSE</div>
   <div class="splash-sub">Análisis de Movimiento en Tiempo Real</div>
   <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
   <div class="splash-status" id="splashStatus">Cargando modelo de detección...</div>
@@ -362,7 +362,7 @@
 <!-- MAIN APP -->
 <div id="app">
   <header>
-    <div class="header-brand">FISIO<span style="color:var(--accent2)">MOTION</span></div>
+    <div class="header-brand">MEDI<span style="color:var(--accent2)">POSE</span></div>
     <div class="header-status">
       <div class="status-dot" id="statusDot"></div>
       <span class="status-label" id="statusLabel">INICIANDO</span>
@@ -986,7 +986,7 @@ function toggleRecord() {
 }
 function downloadRecording() {
   const data = {
-    meta: { app: 'FisioMotion', date: new Date().toISOString(), frames: state.recordFrames.length },
+    meta: { app: 'medipose', date: new Date().toISOString(), frames: state.recordFrames.length },
     session: state.recordFrames
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
