@@ -130,16 +130,21 @@
     /* ─── CAMERA AREA ─── */
     .camera-wrap {
       position: relative; flex: 1; overflow: hidden;
+      background: #000;
+    }
+    #videoLayer {
+      position: absolute; inset: 0;
+      transform-origin: center center;
     }
     #video {
       position: absolute; inset: 0;
       width: 100%; height: 100%;
-      object-fit: cover;
+      object-fit: contain;
       transform: scaleX(-1);
     }
     #canvas {
-      position: absolute; inset: 0;
-      width: 100%; height: 100%;
+      position: absolute;
+      /* left/top/width/height set dynamically by resizeCanvas() */
       transform: scaleX(-1);
     }
 
@@ -380,8 +385,10 @@
   </header>
 
   <div class="camera-wrap">
-    <video id="video" autoplay playsinline muted></video>
-    <canvas id="canvas"></canvas>
+    <div id="videoLayer">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas"></canvas>
+    </div>
     <div class="scanlines"></div>
     <div class="bracket bracket-tl"></div>
     <div class="bracket bracket-tr"></div>
@@ -498,6 +505,28 @@
     <div><div class="setting-name">Alta precisión</div><div class="setting-desc">Más exactitud, puede ser más lento</div></div>
     <div class="toggle" id="togHQ" onclick="this.classList.toggle('on')"></div>
   </div>
+  <div class="setting-row">
+    <div style="flex:1">
+      <div class="setting-name">Zoom</div>
+      <div class="setting-desc">Ajustar encuadre de la imagen</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+        <input type="range" id="zoomSlider" min="50" max="150" value="100" step="5"
+          oninput="setZoom(this.value)"
+          style="flex:1;height:4px;-webkit-appearance:none;appearance:none;background:var(--border);border-radius:2px;outline:none;cursor:pointer;">
+        <span id="zoomLabel" style="font-family:var(--mono);font-size:12px;color:var(--accent);min-width:36px;text-align:right">100%</span>
+      </div>
+    </div>
+  </div>
+  <div class="setting-row">
+    <div style="flex:1">
+      <div class="setting-name">Cámara</div>
+      <div class="setting-desc">Seleccionar dispositivo de video</div>
+      <select id="cameraSelect" onchange="switchCamera(this.value)"
+        style="margin-top:10px;width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 10px;outline:none;cursor:pointer;">
+        <option value="">-- Detectando cámaras... --</option>
+      </select>
+    </div>
+  </div>
   <div class="close-settings" onclick="closeSettings()">CERRAR</div>
 </div>
 
@@ -517,6 +546,7 @@ const state = {
   showAngles: true,
   recording: false,
   facingMode: 'user',
+  deviceId: null,       // null = usar facingMode; string = deviceId específico
   lastResults: null,
   fps: 0,
   frameCount: 0,
@@ -533,14 +563,55 @@ const ctx     = canvas.getContext('2d');
 
 // ─── Resize canvas ───────────────────────────────────────────────────────────
 function resizeCanvas() {
-  canvas.width  = video.videoWidth  || canvas.offsetWidth;
-  canvas.height = video.videoHeight || canvas.offsetHeight;
+  const vW = video.videoWidth;
+  const vH = video.videoHeight;
+  const layer = document.getElementById('videoLayer');
+  const layerW = layer.offsetWidth;
+  const layerH = layer.offsetHeight;
+
+  if (!vW || !vH || !layerW || !layerH) return;
+
+  // Match canvas to the actual displayed area of the video (object-fit: contain)
+  const scale = Math.min(layerW / vW, layerH / vH);
+  const dispW = Math.round(vW * scale);
+  const dispH = Math.round(vH * scale);
+  const left  = Math.round((layerW - dispW) / 2);
+  const top   = Math.round((layerH - dispH) / 2);
+
+  canvas.width  = vW;
+  canvas.height = vH;
+  canvas.style.left   = left + 'px';
+  canvas.style.top    = top  + 'px';
+  canvas.style.width  = dispW + 'px';
+  canvas.style.height = dispH + 'px';
 }
 window.addEventListener('resize', resizeCanvas);
 
 // ─── MediaPipe Pose ───────────────────────────────────────────────────────────
 let pose = null;
-let mpCamera = null;
+let poseLoopId = null;
+let poseProcessing = false;
+
+function startPoseLoop() {
+  if (poseLoopId) cancelAnimationFrame(poseLoopId);
+  poseProcessing = false;
+  const loop = async () => {
+    if (state.mode !== 'live') return;
+    if (!poseProcessing && video.readyState >= 2) {
+      poseProcessing = true;
+      try { await pose.send({ image: video }); }
+      finally { poseProcessing = false; }
+    }
+    poseLoopId = requestAnimationFrame(loop);
+  };
+  poseLoopId = requestAnimationFrame(loop);
+}
+
+function stopPoseLoop() {
+  if (poseLoopId) cancelAnimationFrame(poseLoopId);
+  poseLoopId = null;
+  poseProcessing = false;
+}
 
 async function initPose() {
   setProgress(20, 'Inicializando MediaPipe Pose...');
@@ -562,24 +633,24 @@ async function initPose() {
 
 async function startCamera() {
   try {
+    stopPoseLoop();
     video.muted = true;
-    const constraints = {
-      video: {
-        facingMode: state.facingMode,
-        width: { ideal: 640 }, height: { ideal: 480 }
-      }
-    };
-    if (mpCamera) mpCamera.stop();
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    // Detener tracks del stream anterior para liberar el dispositivo
+    if (video.srcObject) {
+      video.srcObject.getTracks().forEach(t => t.stop());
+      video.srcObject = null;
+    }
+
+    const videoConstraint = state.deviceId
+      ? { deviceId: { exact: state.deviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
+      : { facingMode: state.facingMode, width: { ideal: 640 }, height: { ideal: 480 } };
+
+    const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraint });
     video.srcObject = stream;
     await new Promise(r => video.onloadedmetadata = r);
     resizeCanvas();
     setProgress(80, 'Cámara lista. Iniciando detección...');
-    mpCamera = new Camera(video, {
-      onFrame: async () => { await pose.send({ image: video }); },
-      width: 640, height: 480
-    });
-    mpCamera.start();
+    startPoseLoop();
     setProgress(100, 'Listo.');
     setTimeout(showApp, 600);
   } catch(e) {
@@ -714,11 +785,22 @@ function drawAngleArc(a, b, c, angle, color) {
   const ang2 = Math.atan2(c.y - b.y, c.x - b.x);
   ctx.beginPath(); ctx.arc(b.x, b.y, r, ang1, ang2);
   ctx.strokeStyle = color + 'cc'; ctx.lineWidth = 2; ctx.stroke();
-  // Label
+  // Label — counter-flip so text reads correctly when canvas is CSS-mirrored
+  ctx.save();
+  ctx.translate(b.x + 14, b.y - 6);
+  if (canvasIsMirrored()) ctx.scale(-1, 1);
   ctx.fillStyle = color;
   ctx.font = 'bold 11px "Space Mono"';
-  ctx.fillText(`${angle}°`, b.x + 14, b.y - 6);
+  ctx.fillText(`${angle}°`, 0, 0);
   ctx.restore();
+  ctx.restore();
+}
+
+function canvasIsMirrored() {
+  if (canvas.classList.contains('no-mirror')) return false;
+  const t = canvas.style.transform;
+  if (t === 'scaleX(1)') return false;
+  return true; // default CSS is scaleX(-1)
 }
 
 // ─── Update angles panel ──────────────────────────────────────────────────────
@@ -852,7 +934,7 @@ function handleVideoUpload(event) {
 }
 
 function startVideoAnalysis(url) {
-  if (mpCamera) mpCamera.stop();
+  stopPoseLoop();
   if (videoFile.rafId) cancelAnimationFrame(videoFile.rafId);
   if (playback.active) { if (playback.timer) clearTimeout(playback.timer); playback.active = false; playback.playing = false; }
 
@@ -999,7 +1081,7 @@ function stopActivePlayback() {
 
 // ─── Playback engine ──────────────────────────────────────────────────────────
 function startPlayback(frames) {
-  if (mpCamera) mpCamera.stop();
+  stopPoseLoop();
   if (videoFile.active) stopVideoAnalysis();
 
   state.mode = 'json';
@@ -1209,14 +1291,53 @@ function downloadRecording() {
 }
 async function flipCamera() {
   state.facingMode = state.facingMode === 'user' ? 'environment' : 'user';
+  state.deviceId = null; // volver a usar facingMode al flipear
   const mirror = document.getElementById('togMirror').classList.contains('on');
   const flip = state.facingMode === 'user' && mirror;
   video.style.transform = flip ? 'scaleX(-1)' : 'scaleX(1)';
   canvas.style.transform = flip ? 'scaleX(-1)' : 'scaleX(1)';
   await startCamera();
 }
-function openSettings() { document.getElementById('settingsPanel').classList.add('open'); }
+function setZoom(val) {
+  document.getElementById('videoLayer').style.transform = `scale(${parseInt(val) / 100})`;
+  document.getElementById('zoomLabel').textContent = val + '%';
+  resizeCanvas();
+}
+
+async function openSettings() {
+  document.getElementById('settingsPanel').classList.add('open');
+  await populateCameraList();
+}
 function closeSettings() { document.getElementById('settingsPanel').classList.remove('open'); }
+
+async function populateCameraList() {
+  const select = document.getElementById('cameraSelect');
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cameras = devices.filter(d => d.kind === 'videoinput');
+    const currentStream = video.srcObject;
+    const activeId = currentStream?.getVideoTracks()[0]?.getSettings()?.deviceId || '';
+
+    select.innerHTML = cameras.map((cam, i) => {
+      const label = cam.label || `Cámara ${i + 1}`;
+      const selected = cam.deviceId === activeId ? 'selected' : '';
+      return `<option value="${cam.deviceId}" ${selected}>${label}</option>`;
+    }).join('');
+
+    if (cameras.length === 0) {
+      select.innerHTML = '<option value="">Sin cámaras detectadas</option>';
+    }
+  } catch {
+    select.innerHTML = '<option value="">Error al listar cámaras</option>';
+  }
+}
+
+async function switchCamera(deviceId) {
+  if (!deviceId || state.mode !== 'live') return;
+  state.deviceId = deviceId;
+  await startCamera();
+  showToast('Cámara cambiada');
+}
 
 function showToast(msg) {
   const t = document.getElementById('toast');
