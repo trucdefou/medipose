@@ -527,6 +527,10 @@
       </select>
     </div>
   </div>
+  <div class="setting-row">
+    <div><div class="setting-name">Bloqueo de persona</div><div class="setting-desc">Mantener seguimiento en la primera persona detectada (útil con 2 personas en cámara)</div></div>
+    <button onclick="resetPersonAnchor()" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--accent);font-family:var(--mono);font-size:11px;padding:8px 14px;cursor:pointer;white-space:nowrap">Resetear</button>
+  </div>
   <div class="close-settings" onclick="closeSettings()">CERRAR</div>
 </div>
 
@@ -554,6 +558,8 @@ const state = {
   poseDetected: false,
   recordFrames: [],
   mode: 'live', // 'live' | 'json' | 'video'
+  personAnchor: null,   // { x, y } centro de la persona bloqueada
+  lastValidLms: null,   // últimos landmarks válidos de la persona bloqueada
 };
 
 // ─── DOM refs ────────────────────────────────────────────────────────────────
@@ -818,14 +824,56 @@ function updateAnglesPanel(angles) {
   }).join('');
 }
 
+// ─── Person anchor helpers ─────────────────────────────────────────────────────
+// Devuelve el centro (promedio de hombros + caderas) en coordenadas normalizadas
+function getPersonCenter(lms) {
+  const pts = [11, 12, 23, 24];
+  const valid = pts.filter(i => lms[i] && (lms[i].visibility || 0) > 0.3);
+  if (!valid.length) return null;
+  return {
+    x: valid.reduce((s, i) => s + lms[i].x, 0) / valid.length,
+    y: valid.reduce((s, i) => s + lms[i].y, 0) / valid.length,
+  };
+}
+
+function resetPersonAnchor() {
+  state.personAnchor = null;
+  state.lastValidLms = null;
+  showToast('Referencia de persona reseteada');
+}
+
 // ─── Main results handler ─────────────────────────────────────────────────────
 function onResults(results) {
   updateFps();
   resizeCanvas();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  const lms = results.poseLandmarks;
+  let lms = results.poseLandmarks;
   const detected = !!(lms && lms.length);
+
+  // Person lock: evitar que el detector salte a otra persona en cuadro
+  if (detected) {
+    const center = getPersonCenter(lms);
+    if (center) {
+      if (!state.personAnchor) {
+        // Primera detección: establecer ancla
+        state.personAnchor = { x: center.x, y: center.y };
+        state.lastValidLms = lms;
+      } else {
+        const dist = Math.hypot(center.x - state.personAnchor.x, center.y - state.personAnchor.y);
+        if (dist > 0.25) {
+          // Demasiado lejos del ancla: probablemente es la otra persona
+          lms = state.lastValidLms;
+        } else {
+          // Detección válida: actualizar ancla gradualmente (EMA)
+          state.personAnchor.x = state.personAnchor.x * 0.85 + center.x * 0.15;
+          state.personAnchor.y = state.personAnchor.y * 0.85 + center.y * 0.15;
+          state.lastValidLms = lms;
+        }
+      }
+    }
+  }
+
   state.poseDetected = detected;
 
   document.getElementById('noPersonMsg').classList.toggle('show', !detected);
@@ -937,6 +985,10 @@ function startVideoAnalysis(url) {
   stopPoseLoop();
   if (videoFile.rafId) cancelAnimationFrame(videoFile.rafId);
   if (playback.active) { if (playback.timer) clearTimeout(playback.timer); playback.active = false; playback.playing = false; }
+
+  // Resetear ancla de persona al cargar nuevo video
+  state.personAnchor = null;
+  state.lastValidLms = null;
 
   state.mode = 'video';
   videoFile.active = true;
