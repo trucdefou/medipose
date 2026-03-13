@@ -290,6 +290,62 @@
       transition: opacity .3s;
     }
     .toast.show { opacity: 1; }
+
+    /* ─── PLAYBACK BAR ─── */
+    .playback-bar {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      z-index: 6;
+      background: rgba(6,14,31,.94);
+      border-top: 1px solid var(--border);
+      padding: 10px 16px 12px;
+      display: none; flex-direction: column; gap: 8px;
+      backdrop-filter: blur(12px);
+    }
+    .playback-bar.visible { display: flex; }
+
+    .playback-meta {
+      font-family: var(--mono); font-size: 11px; color: var(--muted);
+      text-align: center; letter-spacing: .5px;
+    }
+    .playback-meta span { color: var(--accent); }
+
+    .playback-scrubber {
+      width: 100%;
+      -webkit-appearance: none; appearance: none;
+      height: 4px; background: var(--border); border-radius: 2px;
+      outline: none; cursor: pointer;
+    }
+    .playback-scrubber::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--accent); cursor: pointer;
+      box-shadow: 0 0 6px var(--accent);
+    }
+    .playback-scrubber::-moz-range-thumb {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--accent); cursor: pointer; border: none;
+    }
+
+    .playback-actions {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+    }
+    .pb-btn {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text);
+      width: 36px; height: 36px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; cursor: pointer;
+      transition: background .2s, border-color .2s;
+    }
+    .pb-btn:active { transform: scale(.92); }
+    .pb-btn:hover { border-color: var(--accent); background: rgba(0,229,255,.08); }
+    .pb-main {
+      width: 48px; height: 48px; border-radius: 50%;
+      border-color: var(--accent); font-size: 18px; color: var(--accent);
+    }
+    .pb-close {
+      border-color: var(--warn); color: var(--warn); margin-left: 8px;
+    }
   </style>
 </head>
 <body>
@@ -321,6 +377,28 @@
     <div class="bracket bracket-tr"></div>
     <div class="bracket bracket-bl"></div>
     <div class="bracket bracket-br"></div>
+
+    <!-- Playback controls bar -->
+    <div class="playback-bar" id="playbackBar">
+      <div class="playback-meta">
+        FRAME <span id="pbFrame">1</span> / <span id="pbTotal">0</span>
+        &nbsp;·&nbsp;
+        <span id="pbTime">0.0s</span>
+      </div>
+      <input type="range" class="playback-scrubber" id="pbScrubber"
+             min="0" max="100" value="0"
+             oninput="seekPlaybackTo(this.value)"
+             onmousedown="playback.wasPlaying=playback.playing; playback.playing=false;"
+             onmouseup="if(playback.wasPlaying){playback.playing=true;scheduleNextFrame();}"
+             ontouchstart="playback.wasPlaying=playback.playing; playback.playing=false;"
+             ontouchend="if(playback.wasPlaying){playback.playing=true;scheduleNextFrame();}">
+      <div class="playback-actions">
+        <button class="pb-btn" onclick="rewindPlayback()" title="−30 frames">⏮</button>
+        <button class="pb-btn pb-main" id="btnPlayPause" onclick="togglePlayPause()">⏸</button>
+        <button class="pb-btn" onclick="forwardPlayback()" title="+30 frames">⏭</button>
+        <button class="pb-btn pb-close" onclick="stopPlayback()" title="Cerrar reproducción">✕</button>
+      </div>
+    </div>
 
     <!-- HUD Métricas -->
     <div class="hud">
@@ -363,6 +441,10 @@
       <div class="btn-icon" id="recordIcon">REC</div>
       <span id="recordLabel">Grabar</span>
     </button>
+    <button class="btn" id="btnImport" onclick="triggerImport()">
+      <div class="btn-icon">📂</div>
+      <span>Importar</span>
+    </button>
     <button class="btn active" id="btnCamera" onclick="flipCamera()">
       <div class="btn-icon">🔄</div>
       <span>Cámara</span>
@@ -401,6 +483,7 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<input type="file" id="fileInput" accept=".json" style="display:none" onchange="handleImport(event)">
 
 <!-- MediaPipe via CDN -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -687,6 +770,198 @@ function onResults(results) {
       angles: angles.map(a => ({ name: a.name, val: a.val }))
     });
   }
+}
+
+// ─── Playback state ──────────────────────────────────────────────────────────
+const playback = {
+  active: false,
+  frames: [],
+  currentFrame: 0,
+  playing: false,
+  timer: null,
+  wasPlaying: false,
+};
+
+// ─── Import ───────────────────────────────────────────────────────────────────
+function triggerImport() {
+  document.getElementById('fileInput').click();
+}
+
+function handleImport(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!data.session || !Array.isArray(data.session) || data.session.length === 0) {
+        throw new Error('Formato inválido');
+      }
+      startPlayback(data.session);
+    } catch {
+      showToast('⚠️ Archivo inválido o vacío');
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+
+// ─── Playback engine ──────────────────────────────────────────────────────────
+function startPlayback(frames) {
+  if (mpCamera) mpCamera.stop();
+
+  playback.active = true;
+  playback.frames = frames;
+  playback.currentFrame = 0;
+  playback.playing = true;
+
+  const scrubber = document.getElementById('pbScrubber');
+  scrubber.max = frames.length - 1;
+  scrubber.value = 0;
+  document.getElementById('pbTotal').textContent = frames.length;
+  document.getElementById('btnPlayPause').textContent = '⏸';
+  document.getElementById('playbackBar').classList.add('visible');
+  document.getElementById('video').style.visibility = 'hidden';
+  document.getElementById('statusDot').className = 'status-dot active';
+  document.getElementById('statusLabel').textContent = 'REPRODUCIENDO';
+  document.getElementById('noPersonMsg').classList.remove('show');
+
+  showToast(`▶ ${frames.length} fotogramas cargados`);
+  scheduleNextFrame();
+}
+
+function stopPlayback() {
+  if (playback.timer) clearTimeout(playback.timer);
+  playback.active = false;
+  playback.playing = false;
+
+  document.getElementById('playbackBar').classList.remove('visible');
+  document.getElementById('video').style.visibility = '';
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  anglesPanel.innerHTML = '';
+
+  startCamera();
+}
+
+function togglePlayPause() {
+  playback.playing = !playback.playing;
+  document.getElementById('btnPlayPause').textContent = playback.playing ? '⏸' : '▶';
+  if (playback.playing) {
+    if (playback.currentFrame >= playback.frames.length - 1) playback.currentFrame = 0;
+    scheduleNextFrame();
+  }
+}
+
+function scheduleNextFrame() {
+  if (!playback.playing || !playback.active) return;
+  if (playback.timer) clearTimeout(playback.timer);
+
+  const i = playback.currentFrame;
+  const frames = playback.frames;
+
+  if (i >= frames.length) {
+    playback.playing = false;
+    document.getElementById('btnPlayPause').textContent = '▶';
+    return;
+  }
+
+  renderPlaybackFrame(frames[i]);
+  updatePlaybackUI(i);
+
+  const nextI = i + 1;
+  if (nextI >= frames.length) {
+    playback.playing = false;
+    document.getElementById('btnPlayPause').textContent = '▶';
+    return;
+  }
+
+  let delay = 33;
+  if (frames[i].t && frames[nextI].t) {
+    delay = Math.min(250, Math.max(16, frames[nextI].t - frames[i].t));
+  }
+
+  playback.currentFrame = nextI;
+  playback.timer = setTimeout(scheduleNextFrame, delay);
+}
+
+function renderPlaybackFrame(frame) {
+  if (!frame) return;
+  resizeCanvas();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Dark background with subtle grid
+  ctx.fillStyle = 'rgba(6,14,31,0.98)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = 'rgba(26,51,87,0.45)';
+  ctx.lineWidth = 1;
+  const step = 40;
+  for (let x = 0; x < canvas.width; x += step) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+  }
+  for (let y = 0; y < canvas.height; y += step) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+  }
+
+  if (!frame.landmarks) return;
+
+  // Restore normalized landmarks to canvas-space visibility format
+  const lms = frame.landmarks.map(l => ({ x: l.x, y: l.y, z: l.z, visibility: l.v }));
+
+  if (state.showSkeleton) drawSkeleton(lms);
+
+  if (state.showAngles) {
+    const angleMaxMap = {
+      'Codo D': 170, 'Codo I': 170,
+      'Hombro D': 180, 'Hombro I': 180,
+      'Cadera D': 180, 'Cadera I': 180,
+      'Rodilla D': 180, 'Rodilla I': 180,
+    };
+    const angles = (frame.angles || []).map(a => ({
+      name: a.name, val: a.val, max: angleMaxMap[a.name] || 180
+    }));
+    updateAnglesPanel(angles);
+
+    const l = (i) => lm(lms, i);
+    drawAngleArc(l(14), l(12), l(24), angleBetween(l(14), l(12), l(24)), '#00e5ff');
+    drawAngleArc(l(13), l(11), l(23), angleBetween(l(13), l(11), l(23)), '#00e5ff');
+    drawAngleArc(l(12), l(14), l(16), angleBetween(l(12), l(14), l(16)), '#00ffb3');
+    drawAngleArc(l(11), l(13), l(15), angleBetween(l(11), l(13), l(15)), '#00ffb3');
+    drawAngleArc(l(24), l(26), l(28), angleBetween(l(24), l(26), l(28)), '#ffdd57');
+    drawAngleArc(l(23), l(25), l(27), angleBetween(l(23), l(25), l(27)), '#ffdd57');
+  }
+}
+
+function updatePlaybackUI(i) {
+  document.getElementById('pbFrame').textContent = i + 1;
+  document.getElementById('pbScrubber').value = i;
+  const frames = playback.frames;
+  if (frames.length > 0 && frames[i] && frames[0]) {
+    const elapsed = ((frames[i].t || 0) - (frames[0].t || 0)) / 1000;
+    document.getElementById('pbTime').textContent = elapsed.toFixed(1) + 's';
+  }
+}
+
+function seekPlaybackTo(val) {
+  const i = parseInt(val);
+  playback.currentFrame = i;
+  if (playback.frames[i]) {
+    renderPlaybackFrame(playback.frames[i]);
+    updatePlaybackUI(i);
+  }
+}
+
+function rewindPlayback() {
+  const i = Math.max(0, playback.currentFrame - 30);
+  playback.currentFrame = i;
+  renderPlaybackFrame(playback.frames[i]);
+  updatePlaybackUI(i);
+}
+
+function forwardPlayback() {
+  const i = Math.min(playback.frames.length - 1, playback.currentFrame + 30);
+  playback.currentFrame = i;
+  renderPlaybackFrame(playback.frames[i]);
+  updatePlaybackUI(i);
 }
 
 // ─── Controls ─────────────────────────────────────────────────────────────────
