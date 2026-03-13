@@ -199,7 +199,7 @@
     /* ─── BOTTOM BAR ─── */
     .bottom-bar {
       position: relative; z-index: 10;
-      padding: 12px 20px;
+      padding: 12px 8px;
       display: flex; align-items: center; justify-content: space-around;
       background: linear-gradient(0deg, rgba(6,14,31,1) 0%, rgba(6,14,31,0) 100%);
     }
@@ -346,6 +346,16 @@
     .pb-close {
       border-color: var(--warn); color: var(--warn); margin-left: 8px;
     }
+    .pb-speed {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text);
+      font-family: var(--mono); font-size: 12px;
+      padding: 4px 8px; height: 36px; cursor: pointer;
+      outline: none; -webkit-appearance: none; appearance: none; text-align: center;
+    }
+    .pb-speed:focus { border-color: var(--accent); }
+    #video.no-mirror, #canvas.no-mirror { transform: scaleX(1) !important; }
+    #video.video-file-mode { object-fit: contain; background: #000; }
   </style>
 </head>
 <body>
@@ -378,25 +388,30 @@
     <div class="bracket bracket-bl"></div>
     <div class="bracket bracket-br"></div>
 
-    <!-- Playback controls bar -->
+    <!-- Playback / Video analysis controls bar (shared) -->
     <div class="playback-bar" id="playbackBar">
       <div class="playback-meta">
-        FRAME <span id="pbFrame">1</span> / <span id="pbTotal">0</span>
-        &nbsp;·&nbsp;
-        <span id="pbTime">0.0s</span>
+        <span id="pbFrameInfo">FRAME <span id="pbFrame">1</span> / <span id="pbTotal">0</span> &nbsp;·&nbsp; <span id="pbTime">0.0s</span></span>
+        <span id="pbVideoTime" style="display:none">0:00 / 0:00</span>
       </div>
       <input type="range" class="playback-scrubber" id="pbScrubber"
              min="0" max="100" value="0"
-             oninput="seekPlaybackTo(this.value)"
-             onmousedown="playback.wasPlaying=playback.playing; playback.playing=false;"
-             onmouseup="if(playback.wasPlaying){playback.playing=true;scheduleNextFrame();}"
-             ontouchstart="playback.wasPlaying=playback.playing; playback.playing=false;"
-             ontouchend="if(playback.wasPlaying){playback.playing=true;scheduleNextFrame();}">
+             oninput="seekTo(this.value)"
+             onmousedown="pauseForScrub()"
+             onmouseup="resumeAfterScrub()"
+             ontouchstart="pauseForScrub()"
+             ontouchend="resumeAfterScrub()">
       <div class="playback-actions">
-        <button class="pb-btn" onclick="rewindPlayback()" title="−30 frames">⏮</button>
+        <button class="pb-btn" onclick="rewindAction()" title="Retroceder">⏮</button>
         <button class="pb-btn pb-main" id="btnPlayPause" onclick="togglePlayPause()">⏸</button>
-        <button class="pb-btn" onclick="forwardPlayback()" title="+30 frames">⏭</button>
-        <button class="pb-btn pb-close" onclick="stopPlayback()" title="Cerrar reproducción">✕</button>
+        <button class="pb-btn" onclick="forwardAction()" title="Avanzar">⏭</button>
+        <select class="pb-speed" id="pbSpeed" style="display:none" onchange="setVideoSpeed(this.value)">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+        </select>
+        <button class="pb-btn pb-close" onclick="stopActivePlayback()" title="Cerrar">✕</button>
       </div>
     </div>
 
@@ -445,6 +460,10 @@
       <div class="btn-icon">📂</div>
       <span>Importar</span>
     </button>
+    <button class="btn" id="btnVideo" onclick="triggerVideoUpload()">
+      <div class="btn-icon">🎬</div>
+      <span>Video</span>
+    </button>
     <button class="btn active" id="btnCamera" onclick="flipCamera()">
       <div class="btn-icon">🔄</div>
       <span>Cámara</span>
@@ -484,6 +503,7 @@
 
 <div class="toast" id="toast"></div>
 <input type="file" id="fileInput" accept=".json" style="display:none" onchange="handleImport(event)">
+<input type="file" id="videoFileInput" accept="video/*" style="display:none" onchange="handleVideoUpload(event)">
 
 <!-- MediaPipe via CDN -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -503,6 +523,7 @@ const state = {
   lastFpsTime: Date.now(),
   poseDetected: false,
   recordFrames: [],
+  mode: 'live', // 'live' | 'json' | 'video'
 };
 
 // ─── DOM refs ────────────────────────────────────────────────────────────────
@@ -541,6 +562,7 @@ async function initPose() {
 
 async function startCamera() {
   try {
+    video.muted = true;
     const constraints = {
       video: {
         facingMode: state.facingMode,
@@ -782,6 +804,15 @@ const playback = {
   wasPlaying: false,
 };
 
+// ─── Video file state ─────────────────────────────────────────────────────────
+const videoFile = {
+  active: false,
+  url: null,
+  rafId: null,
+  playing: false,
+  wasPlaying: false,
+};
+
 // ─── Import ───────────────────────────────────────────────────────────────────
 function triggerImport() {
   document.getElementById('fileInput').click();
@@ -806,19 +837,185 @@ function handleImport(event) {
   event.target.value = '';
 }
 
+// ─── Video upload & analysis ──────────────────────────────────────────────────
+function triggerVideoUpload() {
+  document.getElementById('videoFileInput').click();
+}
+
+function handleVideoUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (videoFile.url) URL.revokeObjectURL(videoFile.url);
+  videoFile.url = URL.createObjectURL(file);
+  startVideoAnalysis(videoFile.url);
+  event.target.value = '';
+}
+
+function startVideoAnalysis(url) {
+  if (mpCamera) mpCamera.stop();
+  if (videoFile.rafId) cancelAnimationFrame(videoFile.rafId);
+  if (playback.active) { if (playback.timer) clearTimeout(playback.timer); playback.active = false; playback.playing = false; }
+
+  state.mode = 'video';
+  videoFile.active = true;
+  videoFile.playing = false;
+
+  video.srcObject = null;
+  video.src = url;
+  video.muted = false;
+  video.loop = false;
+  video.playbackRate = 1;
+  video.style.visibility = '';
+  video.classList.add('no-mirror', 'video-file-mode');
+  canvas.classList.add('no-mirror');
+
+  // Show video-mode controls in shared bar
+  document.getElementById('pbFrameInfo').style.display = 'none';
+  document.getElementById('pbVideoTime').style.display = '';
+  document.getElementById('pbSpeed').style.display = '';
+  document.getElementById('pbSpeed').value = '1';
+  document.getElementById('playbackBar').classList.add('visible');
+  document.getElementById('btnPlayPause').textContent = '▶';
+  document.getElementById('statusDot').className = 'status-dot active';
+  document.getElementById('statusLabel').textContent = 'VÍDEO';
+  document.getElementById('noPersonMsg').classList.remove('show');
+
+  video.onloadedmetadata = () => {
+    resizeCanvas();
+    const scrubber = document.getElementById('pbScrubber');
+    scrubber.min = 0;
+    scrubber.max = Math.floor(video.duration * 10);
+    scrubber.value = 0;
+    updateVideoTimeUI();
+    showToast('▶ Video listo — pulsa Play');
+  };
+  video.ontimeupdate = () => {
+    if (!videoFile.active) return;
+    document.getElementById('pbScrubber').value = Math.round(video.currentTime * 10);
+    updateVideoTimeUI();
+  };
+  video.onended = () => {
+    videoFile.playing = false;
+    document.getElementById('btnPlayPause').textContent = '▶';
+    if (videoFile.rafId) { cancelAnimationFrame(videoFile.rafId); videoFile.rafId = null; }
+  };
+
+  video.load();
+}
+
+function videoAnalysisLoop() {
+  if (!videoFile.active || !videoFile.playing) return;
+  const loop = async () => {
+    if (!videoFile.active || !videoFile.playing) return;
+    if (!video.paused && !video.ended) await pose.send({ image: video });
+    videoFile.rafId = requestAnimationFrame(loop);
+  };
+  videoFile.rafId = requestAnimationFrame(loop);
+}
+
+function stopVideoAnalysis() {
+  if (videoFile.rafId) cancelAnimationFrame(videoFile.rafId);
+  videoFile.rafId = null;
+  videoFile.active = false;
+  videoFile.playing = false;
+
+  video.pause();
+  video.src = '';
+  video.load();
+  if (videoFile.url) { URL.revokeObjectURL(videoFile.url); videoFile.url = null; }
+
+  video.classList.remove('no-mirror', 'video-file-mode');
+  canvas.classList.remove('no-mirror');
+  video.onloadedmetadata = null;
+  video.ontimeupdate = null;
+  video.onended = null;
+
+  // Restore shared bar to JSON mode defaults
+  document.getElementById('pbFrameInfo').style.display = '';
+  document.getElementById('pbVideoTime').style.display = 'none';
+  document.getElementById('pbSpeed').style.display = 'none';
+  document.getElementById('playbackBar').classList.remove('visible');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  anglesPanel.innerHTML = '';
+
+  state.mode = 'live';
+  startCamera();
+}
+
+function updateVideoTimeUI() {
+  const fmt = (s) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
+  const dur = isFinite(video.duration) ? video.duration : 0;
+  document.getElementById('pbVideoTime').textContent = `${fmt(video.currentTime)} / ${fmt(dur)}`;
+}
+
+function setVideoSpeed(val) {
+  video.playbackRate = parseFloat(val);
+}
+
+// ─── Mode-aware dispatchers for shared playback bar ───────────────────────────
+function seekTo(val) {
+  if (state.mode === 'json') {
+    seekPlaybackTo(val);
+  } else if (state.mode === 'video') {
+    video.currentTime = parseFloat(val) / 10;
+    updateVideoTimeUI();
+  }
+}
+
+function pauseForScrub() {
+  if (state.mode === 'json') {
+    playback.wasPlaying = playback.playing;
+    playback.playing = false;
+  } else if (state.mode === 'video') {
+    videoFile.wasPlaying = videoFile.playing;
+    videoFile.playing = false;
+    video.pause();
+    if (videoFile.rafId) { cancelAnimationFrame(videoFile.rafId); videoFile.rafId = null; }
+  }
+}
+
+function resumeAfterScrub() {
+  if (state.mode === 'json') {
+    if (playback.wasPlaying) { playback.playing = true; scheduleNextFrame(); }
+  } else if (state.mode === 'video') {
+    if (videoFile.wasPlaying) { videoFile.playing = true; video.play(); videoAnalysisLoop(); }
+  }
+}
+
+function rewindAction() {
+  if (state.mode === 'json') rewindPlayback();
+  else if (state.mode === 'video') { video.currentTime = Math.max(0, video.currentTime - 5); }
+}
+
+function forwardAction() {
+  if (state.mode === 'json') forwardPlayback();
+  else if (state.mode === 'video') { video.currentTime = Math.min(video.duration || 0, video.currentTime + 5); }
+}
+
+function stopActivePlayback() {
+  if (state.mode === 'json') stopPlayback();
+  else if (state.mode === 'video') stopVideoAnalysis();
+}
+
 // ─── Playback engine ──────────────────────────────────────────────────────────
 function startPlayback(frames) {
   if (mpCamera) mpCamera.stop();
+  if (videoFile.active) stopVideoAnalysis();
 
+  state.mode = 'json';
   playback.active = true;
   playback.frames = frames;
   playback.currentFrame = 0;
   playback.playing = true;
 
   const scrubber = document.getElementById('pbScrubber');
+  scrubber.min = 0;
   scrubber.max = frames.length - 1;
   scrubber.value = 0;
   document.getElementById('pbTotal').textContent = frames.length;
+  document.getElementById('pbFrameInfo').style.display = '';
+  document.getElementById('pbVideoTime').style.display = 'none';
+  document.getElementById('pbSpeed').style.display = 'none';
   document.getElementById('btnPlayPause').textContent = '⏸';
   document.getElementById('playbackBar').classList.add('visible');
   document.getElementById('video').style.visibility = 'hidden';
@@ -834,6 +1031,7 @@ function stopPlayback() {
   if (playback.timer) clearTimeout(playback.timer);
   playback.active = false;
   playback.playing = false;
+  state.mode = 'live';
 
   document.getElementById('playbackBar').classList.remove('visible');
   document.getElementById('video').style.visibility = '';
@@ -844,11 +1042,23 @@ function stopPlayback() {
 }
 
 function togglePlayPause() {
-  playback.playing = !playback.playing;
-  document.getElementById('btnPlayPause').textContent = playback.playing ? '⏸' : '▶';
-  if (playback.playing) {
-    if (playback.currentFrame >= playback.frames.length - 1) playback.currentFrame = 0;
-    scheduleNextFrame();
+  if (state.mode === 'json') {
+    playback.playing = !playback.playing;
+    document.getElementById('btnPlayPause').textContent = playback.playing ? '⏸' : '▶';
+    if (playback.playing) {
+      if (playback.currentFrame >= playback.frames.length - 1) playback.currentFrame = 0;
+      scheduleNextFrame();
+    }
+  } else if (state.mode === 'video') {
+    videoFile.playing = !videoFile.playing;
+    document.getElementById('btnPlayPause').textContent = videoFile.playing ? '⏸' : '▶';
+    if (videoFile.playing) {
+      video.play();
+      videoAnalysisLoop();
+    } else {
+      video.pause();
+      if (videoFile.rafId) { cancelAnimationFrame(videoFile.rafId); videoFile.rafId = null; }
+    }
   }
 }
 
